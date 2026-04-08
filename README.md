@@ -65,7 +65,13 @@ flowchart TD
 ├── Person_tracking.pro    # Qt Creator / qmake project file
 ├── README.md              # English documentation
 ├── README.de.md           # German documentation
-└── main.cpp               # Full pipeline implementation
+├── config.cpp/.h          # Runtime paths, thresholds, and app settings
+├── detector.cpp/.h        # YOLOv8-SEG decoding and Det structure
+├── pose.cpp/.h            # YOLOv8-POSE crop inference
+├── reid.cpp/.h            # OSNet ReID extraction
+├── tracker.cpp/.h         # IoU/ReID tracking and gallery logic
+├── visualization.cpp/.h   # Masks, skeletons, and overlays
+└── main.cpp               # Pipeline orchestration entry point
 ```
 
 ## Quick Start
@@ -110,7 +116,13 @@ Then run:
 If you do not use Qt Creator, you can still build manually:
 
 ```bash
-g++ main.cpp -O2 -std=c++17 `pkg-config --cflags --libs opencv4` -lonnxruntime -o app
+g++ main.cpp config.cpp detector.cpp pose.cpp reid.cpp tracker.cpp visualization.cpp \
+  -O2 -std=c++17 \
+  -I/home/mosta/Downloads/onnxruntime-linux-x64-1.24.2/include \
+  `pkg-config --cflags --libs opencv4` \
+  -L/home/mosta/Downloads/onnxruntime-linux-x64-1.24.2/lib \
+  -Wl,-rpath,/home/mosta/Downloads/onnxruntime-linux-x64-1.24.2/lib \
+  -lonnxruntime -lpthread -ldl -o app
 ```
 
 ## Inputs And Outputs
@@ -217,6 +229,18 @@ The final frame includes:
 | mask overlay rendering | `blend_all_masks_once()` |
 | end-to-end execution flow | `main()` |
 
+## Current Architecture
+
+The project is now split into focused modules instead of keeping the whole pipeline in one file:
+
+- `config.cpp/.h`: default paths, thresholds, model sizes, and window title
+- `detector.cpp/.h`: `Det`, preprocessing, YOLOv8-SEG decoding, mask generation, and NMS
+- `pose.cpp/.h`: per-person pose inference and keypoint decoding
+- `reid.cpp/.h`: OSNet preprocessing and embedding extraction
+- `tracker.cpp/.h`: active track matching and long-term gallery reuse
+- `visualization.cpp/.h`: mask blending and pose drawing
+- `main.cpp`: initializes sessions, runs the pipeline loop, and renders output
+
 ## Core Data Structures
 
 ### `Det`
@@ -309,20 +333,16 @@ If old IDs are not reused often enough:
 ## Current Limitations
 
 - model and video paths are hard-coded in `main()`
-- the whole pipeline is implemented in one source file
+- default paths and thresholds are still hard-coded in `config.cpp`
 - `Person_tracking.pro` contains machine-specific ONNX Runtime paths
 - model export assumptions are tuned to common YOLOv8 ONNX formats, not every possible variant
 - there is no command-line configuration yet
 
-## Suggested Next Refactor
+## Suggested Next Steps
 
-If you plan to grow this project, the next useful step would be splitting `main.cpp` into:
+The most useful next improvements would be:
 
-- `detector.cpp/.h`
-- `pose.cpp/.h`
-- `reid.cpp/.h`
-- `tracker.cpp/.h`
-- `visualization.cpp/.h`
-- `config.cpp/.h`
-
-That would make the project easier to test, tune, and document further.
+- move runtime paths and thresholds from `config.cpp` to CLI arguments or a config file
+- add `.gitignore` entries for generated files such as `app` and large output videos
+- separate documentation-only files from code changes when committing
+- add a small sample input plus expected output screenshots for easier onboarding

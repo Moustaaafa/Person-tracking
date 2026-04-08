@@ -65,7 +65,13 @@ flowchart TD
 ├── Person_tracking.pro    # Qt-Creator- / qmake-Projektdatei
 ├── README.md              # Englische Dokumentation
 ├── README.de.md           # Deutsche Dokumentation
-└── main.cpp               # Gesamte Pipeline-Implementierung
+├── config.cpp/.h          # Laufzeitpfade, Schwellwerte und App-Einstellungen
+├── detector.cpp/.h        # YOLOv8-SEG-Dekodierung und Det-Struktur
+├── pose.cpp/.h            # YOLOv8-POSE-Inferenz auf Personenausschnitten
+├── reid.cpp/.h            # OSNet-ReID-Extraktion
+├── tracker.cpp/.h         # IoU/ReID-Tracking und Galerie-Logik
+├── visualization.cpp/.h   # Masken, Skelette und Overlays
+└── main.cpp               # Einstiegspunkt und Pipeline-Orchestrierung
 ```
 
 ## Schnellstart
@@ -110,7 +116,13 @@ Dann ausfuehren:
 Falls du Qt Creator nicht verwendest, kannst du auch manuell bauen:
 
 ```bash
-g++ main.cpp -O2 -std=c++17 `pkg-config --cflags --libs opencv4` -lonnxruntime -o app
+g++ main.cpp config.cpp detector.cpp pose.cpp reid.cpp tracker.cpp visualization.cpp \
+  -O2 -std=c++17 \
+  -I/home/mosta/Downloads/onnxruntime-linux-x64-1.24.2/include \
+  `pkg-config --cflags --libs opencv4` \
+  -L/home/mosta/Downloads/onnxruntime-linux-x64-1.24.2/lib \
+  -Wl,-rpath,/home/mosta/Downloads/onnxruntime-linux-x64-1.24.2/lib \
+  -lonnxruntime -lpthread -ldl -o app
 ```
 
 ## Ein- Und Ausgaben
@@ -217,6 +229,18 @@ Das finale Frame enthaelt:
 | Masken-Overlay | `blend_all_masks_once()` |
 | kompletter End-to-End-Ablauf | `main()` |
 
+## Aktuelle Architektur
+
+Das Projekt ist jetzt in klarere Module aufgeteilt und liegt nicht mehr komplett in einer einzigen Datei:
+
+- `config.cpp/.h`: Standardpfade, Schwellwerte, Modellgroessen und Fenstertitel
+- `detector.cpp/.h`: `Det`, Vorverarbeitung, YOLOv8-SEG-Dekodierung, Maskenerzeugung und NMS
+- `pose.cpp/.h`: Pose-Inferenz pro Person und Keypoint-Dekodierung
+- `reid.cpp/.h`: OSNet-Vorverarbeitung und Embedding-Extraktion
+- `tracker.cpp/.h`: Matching aktiver Tracks und Wiederverwendung ueber die Langzeit-Galerie
+- `visualization.cpp/.h`: Masken-Blend und Pose-Zeichnung
+- `main.cpp`: Initialisierung der Sessions, Hauptschleife der Pipeline und Ausgabe
+
 ## Zentrale Datenstrukturen
 
 ### `Det`
@@ -309,20 +333,16 @@ Wenn alte IDs zu selten wiederverwendet werden:
 ## Aktuelle Einschraenkungen
 
 - Modell- und Videopfade sind fest in `main()` hinterlegt
-- die komplette Pipeline liegt in einer einzigen Quelldatei
+- Standardpfade und Schwellwerte sind noch fest in `config.cpp` hinterlegt
 - `Person_tracking.pro` enthaelt maschinenspezifische ONNX-Runtime-Pfade
 - die Modellannahmen sind auf haeufige YOLOv8-ONNX-Formate zugeschnitten, nicht auf jede moegliche Variante
 - es gibt noch keine Konfiguration ueber Kommandozeile
 
-## Sinnvoller Naechster Refactor
+## Sinnvolle Naechste Schritte
 
-Wenn das Projekt weiter wachsen soll, waere der naechste sinnvolle Schritt, `main.cpp` aufzuteilen in:
+Die naechsten sinnvollen Verbesserungen waeren:
 
-- `detector.cpp/.h`
-- `pose.cpp/.h`
-- `reid.cpp/.h`
-- `tracker.cpp/.h`
-- `visualization.cpp/.h`
-- `config.cpp/.h`
-
-Das wuerde Testbarkeit, Tuning und weitere Dokumentation deutlich erleichtern.
+- Laufzeitpfade und Schwellwerte aus `config.cpp` in CLI-Argumente oder eine Konfigurationsdatei verschieben
+- `.gitignore` um generierte Dateien wie `app` und grosse Ausgabevideos erweitern
+- Dokumentationsaenderungen und Codeaenderungen in getrennten Commits halten
+- ein kleines Beispielvideo plus Beispiel-Screenshots fuer leichteres Onboarding ergaenzen
