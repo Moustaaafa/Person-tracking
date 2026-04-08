@@ -1,710 +1,328 @@
-# Person Tracking System Documentation  
-**YOLOv8-SEG + YOLOv8-POSE + OSNet ReID + IoU/ReID Tracker with Long-Term Gallery**
+# Person Tracking System
 
-## 1. Overview
+YOLOv8-SEG + YOLOv8-POSE + OSNet ReID + IoU/ReID tracking with a long-term gallery for ID recovery.
 
-This application is a multi-stage computer vision pipeline for tracking people in video. It combines:
+## What This Project Does
+
+This project tracks people in video and keeps their identities stable over time. It combines:
 
 - person detection
 - instance segmentation
 - pose estimation
-- person re-identification
+- appearance-based re-identification
 - multi-object tracking
-- long-term identity recovery after disappearance
+- long-term ID recovery after disappearance or occlusion
 
-The system reads a video, detects people in each frame, estimates body keypoints, extracts appearance embeddings, and assigns stable IDs over time. If a person leaves the scene and reappears later, the tracker can reuse the old ID using a gallery-based long-term memory.
+The result is a video with:
 
----
+- person masks
+- bounding boxes
+- persistent IDs
+- COCO-17 pose skeletons
 
-## 2. Main Purpose
+Example output: [`output_tracked_pose_seg.mp4`](./output_tracked_pose_seg.mp4)
 
-The code is designed to:
+## Visual Overview
 
-- detect only persons
-- generate a segmentation mask for each person
-- estimate COCO-17 body keypoints
-- extract a ReID embedding for appearance-based identity matching
-- track people frame to frame using:
-  - IoU
-  - cosine distance between embeddings
-- preserve identity over long gaps using a gallery memory
+```mermaid
+flowchart LR
+    A[Input video frame] --> B[YOLOv8-SEG]
+    B --> C[Person boxes]
+    B --> D[Instance masks]
+    C --> E[Crop each person]
+    E --> F[YOLOv8-POSE]
+    E --> G[OSNet ReID]
+    F --> H[17 keypoints per person]
+    G --> I[Appearance embedding]
+    C --> J[Tracker]
+    I --> J
+    J --> K[Track IDs]
+    D --> L[Visualization]
+    H --> L
+    K --> L
+    L --> M[Annotated output video]
+```
 
-This makes it suitable for:
+## ID Lifecycle
 
-- surveillance analytics
-- sports or activity analysis
-- human motion analysis
-- re-identification after occlusion or temporary disappearance
+```mermaid
+flowchart TD
+    A[New detection] --> B{Matches existing track?}
+    B -- Yes --> C[Update track box and embedding]
+    B -- No --> D{Matches gallery embedding?}
+    D -- Yes --> E[Reuse previous ID]
+    D -- No --> F[Create new ID]
+    C --> G[Update long-term gallery]
+    E --> G
+    F --> G
+```
 
----
+## Repository At A Glance
 
-## 3. Build and Runtime
+```text
+.
+├── .gitignore             # Git and Qt Creator ignore rules
+├── Person_tracking.pro    # Qt Creator / qmake project file
+├── README.md              # English documentation
+├── README.de.md           # German documentation
+└── main.cpp               # Full pipeline implementation
+```
 
-## Build
+## Quick Start
+
+### Preferred: Qt Creator
+
+This project is mainly used through Qt Creator.
+
+1. Open `Person_tracking.pro` in Qt Creator.
+2. Let Qt Creator configure the qmake project.
+3. Make sure the OpenCV and ONNX Runtime paths in `Person_tracking.pro` match your machine.
+4. Build the project from Qt Creator.
+5. Run it from Qt Creator.
+
+### Project File Notes
+
+`Person_tracking.pro` currently:
+
+- enables C++17
+- links OpenCV through `pkg-config`
+- links ONNX Runtime from a local installation path
+- adds runtime `rpath` for ONNX Runtime
+
+### Run Configuration
+
+Update the paths inside `main()` first:
+
+- YOLOv8 segmentation model path
+- YOLOv8 pose model path
+- OSNet ReID model path
+- input video path
+- output video path
+
+Then run:
+
+```bash
+./app
+```
+
+### Alternative: Terminal Build
+
+If you do not use Qt Creator, you can still build manually:
+
 ```bash
 g++ main.cpp -O2 -std=c++17 `pkg-config --cflags --libs opencv4` -lonnxruntime -o app
-Run
+```
 
-Update the model and video paths inside main() and then run:
+## Inputs And Outputs
 
-./app
-4. High-Level Architecture
+### Input
 
-The pipeline consists of the following major modules:
+- a video file
+- a YOLOv8 segmentation ONNX model
+- a YOLOv8 pose ONNX model
+- an OSNet ReID ONNX model
 
-YOLOv8-SEG
-detects persons
-produces bounding boxes
-produces instance mask coefficients and mask prototypes
-YOLOv8-POSE
-runs on each detected person crop
-predicts body keypoints for that person
-OSNet ReID
-extracts an appearance embedding from the person crop
-embedding is L2-normalized for cosine comparison
-Tracker
-matches detections to tracks using IoU and ReID similarity
-handles missed detections over short gaps
-stores long-term appearance memory in a gallery
-Visualization
-overlays masks
-draws bounding boxes
-shows track IDs
-draws pose skeletons
-5. Models Used
-5.1 YOLOv8-SEG
-Purpose
+### Output
 
-Used for:
+- a displayed visualization window
+- an optional saved video with masks, boxes, IDs, and pose overlays
 
-person detection
-instance segmentation
-Expected Outputs
+## Pipeline Walkthrough
 
-The code supports common YOLOv8-seg ONNX layouts:
+### 1. Person Detection And Segmentation
 
-pred: [1, C, N]
-proto: [1, nm, mh, mw]
+Implemented in `detectPersonsYOLOv8Seg()`.
 
-Where:
+This step:
 
-N = number of candidate detections
-C = channels per prediction
-nm = number of mask coefficients
-mh, mw = prototype mask resolution
-Supported Layout Variants
+- resizes the frame to the segmentation model input
+- runs YOLOv8-SEG
+- decodes person detections
+- reconstructs instance masks from mask coefficients and prototypes
+- applies NMS to remove overlapping detections
 
-The code handles both:
+Each valid detection becomes a `Det` object containing:
 
-C = 4 + nc + nm
-C = 5 + nc + nm
+- `box`
+- `conf`
+- `mask_u8`
 
-That means it supports exports:
+### 2. ReID Embedding Extraction
 
-without objectness
-with objectness
-Assumptions
-COCO dataset format
-nc = 80
-person class id = 0
-Output Usage
+Implemented in `ReIDExtractor::extract()`.
 
-For each person detection:
+For each detected person, the code:
 
-bounding box is decoded
-confidence score is computed
-mask coefficients are extracted
-prototype masks are combined into a full-frame binary mask
-5.2 YOLOv8-POSE
-Purpose
+- crops the person region
+- resizes it to `128 x 256`
+- converts BGR to RGB
+- normalizes with ImageNet-style mean and std
+- runs the OSNet ONNX model
+- L2-normalizes the output embedding
 
-Used for per-person pose estimation.
+The embedding is stored in `Det.emb`.
 
-Input Strategy
+### 3. Pose Estimation
 
-Instead of running pose on the full frame, the code:
+Implemented in `runPoseOnCropYOLOv8()`.
 
-crops each detected person from the frame
-resizes the crop
-runs the pose model only on that crop
+Instead of running pose on the full frame, the system runs YOLOv8-POSE on each detected person crop. This improves keypoint association because each crop usually contains only one person.
 
-This reduces ambiguity and improves per-person keypoint association.
+For the best pose candidate, the code stores:
 
-Expected Output
+- `kps`
+- `kp_conf`
 
-Common format assumed:
+### 4. Tracking And Long-Term ID Recovery
 
-[1, C, N]
+Implemented in `Tracker::step()`.
 
-The code infers the keypoint start index automatically for common layouts such as:
+The tracker uses:
 
-[cx, cy, w, h, score, 17*3]
-[cx, cy, w, h, obj, cls?, 17*3]
-Keypoints
+- IoU for geometric consistency
+- cosine distance for appearance similarity
 
-The system expects COCO-17 keypoints, each represented as:
+It supports two memory levels:
 
-x
-y
-confidence
-Output Usage
+- short-term active tracks
+- long-term gallery embeddings
 
-For the best pose candidate in the crop:
+If a person disappears and later reappears, the tracker can recover the old ID by matching the new embedding against the gallery.
 
-keypoints are scaled back into original frame coordinates
-confidence values are stored
-skeleton lines and joints are drawn later
-5.3 OSNet ReID
-Purpose
+### 5. Visualization
 
-Used for person re-identification.
+Drawing is handled by:
 
-Input
-cropped person image from the bounding box
-resized to 128 x 256
-converted from BGR to RGB
-normalized using ImageNet-like mean/std
-Output
-feature embedding vector
-L2-normalized
-Why It Matters
+- `blend_all_masks_once()`
+- `draw_pose()`
+- the drawing block in `main()`
 
-This embedding gives each person an appearance signature. It helps:
+The final frame includes:
 
-distinguish nearby people with overlapping boxes
-maintain identity when IoU alone is unreliable
-recover the same ID after temporary disappearance
-6. Core Data Structures
-6.1 Det
+- segmentation masks
+- person bounding boxes
+- track ID labels
+- pose skeletons
 
-Represents one detection in the current frame.
+## Code Map
 
-Fields
-box: bounding box
-conf: detection confidence
-emb: ReID embedding
-mask_u8: full-frame binary mask
-kps: pose keypoints
-kp_conf: keypoint confidences
+| Area | Where to read |
+| --- | --- |
+| detection data structure | `struct Det` |
+| ReID preprocessing and inference | `struct ReIDExtractor` |
+| segmentation decoding | `detectPersonsYOLOv8Seg()` |
+| pose decoding | `runPoseOnCropYOLOv8()` |
+| active tracking and gallery logic | `struct Tracker` |
+| skeleton rendering | `draw_pose()` |
+| mask overlay rendering | `blend_all_masks_once()` |
+| end-to-end execution flow | `main()` |
 
-This structure accumulates all information related to one detected person.
+## Core Data Structures
 
-6.2 Track
+### `Det`
 
-Represents one tracked identity.
+Represents one person detection in the current frame.
 
-Fields
-id: persistent person ID
-box: latest bounding box
-emb: smoothed appearance embedding
-time_since_update: number of frames since last matched detection
-6.3 GalleryItem
+- `box`: bounding box
+- `conf`: detection confidence
+- `emb`: ReID embedding
+- `mask_u8`: full-frame binary mask
+- `kps`: pose keypoints
+- `kp_conf`: pose keypoint confidences
 
-Represents a long-term memory entry for an identity.
+### `Track`
 
-Fields
-emb: long-term appearance embedding
-last_seen_frame: frame index of last update
+Represents one active tracked identity.
 
-The gallery allows the system to reuse old IDs when a person reappears.
+- `id`: persistent person ID
+- `box`: latest bounding box
+- `emb`: smoothed appearance embedding
+- `time_since_update`: frames since the last successful match
 
-7. Utility Functions
-sigmoidf
+### `GalleryItem`
 
-Applies sigmoid activation to convert mask logits into probabilities.
+Represents long-term identity memory.
 
-iou
+- `emb`: long-term appearance embedding
+- `last_seen_frame`: most recent frame index for that identity
 
-Computes intersection-over-union between two boxes.
+## Model Assumptions
 
-Used for:
+### YOLOv8-SEG
 
-NMS
-track association
-cosine_distance
+Expected outputs:
 
-Measures appearance difference between two embeddings.
+- `pred: [1, C, N]`
+- `proto: [1, nm, mh, mw]`
 
-Used for:
+Supported channel layouts:
 
-track matching
-gallery matching
-argsort_desc
+- `C = 4 + nc + nm`
+- `C = 5 + nc + nm`
 
-Returns indices sorted by descending confidence.
+Current assumptions:
 
-nms
+- COCO-style class layout
+- `nc = 80`
+- `person class id = 0`
 
-Performs non-maximum suppression on detections using IoU threshold.
+### YOLOv8-POSE
 
-print_shape
+Expected common output shape:
 
-Prints ONNX tensor output shapes for debugging model exports.
+- `[1, C, N]`
 
-8. ReID Extraction Pipeline
+The code infers the keypoint start index for common exports such as:
 
-Implemented in ReIDExtractor.
+- `[cx, cy, w, h, score, 17*3]`
+- `[cx, cy, w, h, obj, cls?, 17*3]`
 
-Workflow
-clip the input box to frame boundaries
-crop the image
-resize to 128 x 256
-convert BGR to RGB
-normalize input channels
-build tensor in CHW format
-run ONNX model
-read embedding output
-L2-normalize embedding
-Output
+### OSNet ReID
 
-A normalized embedding vector stored in Det.emb.
+Expected behavior:
 
-9. Person Detection and Segmentation Pipeline
+- person crop input
+- embedding vector output
+- L2 normalization before matching
 
-Implemented in detectPersonsYOLOv8Seg().
+## Tuning Notes
 
-Workflow
-1. Preprocessing
-resize frame to model input size
-convert BGR to RGB
-normalize to [0,1]
-rearrange to CHW tensor
-2. ONNX Inference
+The main parameters to adjust are:
 
-The segmentation model is run with two outputs:
+- detection confidence threshold
+- detection NMS IoU threshold
+- pose detection threshold
+- tracker `max_age`
+- tracker cosine distance thresholds
+- gallery cosine threshold
 
-prediction tensor
-prototype mask tensor
-3. Output Interpretation
+If IDs are too unstable:
 
-The code determines which output is:
+- lower appearance distance thresholds
+- raise `max_age`
+- improve ReID model quality
 
-prediction tensor
-prototype tensor
+If old IDs are not reused often enough:
 
-by checking tensor rank.
+- slightly relax `gallery_cos_thresh`
 
-4. Layout Inference
+## Current Limitations
 
-The code automatically checks whether the model output includes:
+- model and video paths are hard-coded in `main()`
+- the whole pipeline is implemented in one source file
+- `Person_tracking.pro` contains machine-specific ONNX Runtime paths
+- model export assumptions are tuned to common YOLOv8 ONNX formats, not every possible variant
+- there is no command-line configuration yet
 
-objectness score
-or not
-5. Detection Decoding
+## Suggested Next Refactor
 
-For each prediction:
+If you plan to grow this project, the next useful step would be splitting `main.cpp` into:
 
-decode box center and size
-compute score for class person
-reject low-confidence detections
-scale box back to original frame size
-clamp box to image boundaries
-6. Mask Construction
+- `detector.cpp/.h`
+- `pose.cpp/.h`
+- `reid.cpp/.h`
+- `tracker.cpp/.h`
+- `visualization.cpp/.h`
+- `config.cpp/.h`
 
-For each valid person detection:
-
-extract mask coefficients
-combine them with the mask prototypes
-apply sigmoid
-resize the mask to full-frame resolution
-threshold it inside the bounding box
-store the binary mask in mask_u8
-7. NMS
-
-After all candidates are built, non-maximum suppression removes overlapping detections.
-
-Output
-
-A vector of Det objects containing:
-
-person box
-confidence
-instance mask
-10. Pose Estimation Pipeline
-
-Implemented in runPoseOnCropYOLOv8().
-
-Workflow
-1. Crop Person Region
-
-The detection box is clipped to image bounds and cropped.
-
-2. Preprocess
-resize crop to pose model input size
-convert BGR to RGB
-normalize to [0,1]
-convert to CHW tensor
-3. Run ONNX Pose Inference
-
-The crop is passed to the pose network.
-
-4. Infer Output Layout
-
-The function checks the output channels and infers where keypoint values begin.
-
-5. Select Best Detection
-
-Among the pose candidates in the crop, the one with the highest detection score is selected.
-
-6. Decode Keypoints
-
-For each of the 17 keypoints:
-
-read x
-read y
-read confidence
-map coordinates back to original frame coordinates
-Output
-
-Two vectors are filled:
-
-out_kps
-out_kpconf
-
-These are stored in the detection object.
-
-11. Tracking Pipeline
-
-Implemented in Tracker::step().
-
-The tracking strategy combines:
-
-IoU between boxes
-cosine distance between ReID embeddings
-11.1 Track Update Preparation
-
-At the beginning of each frame:
-
-time_since_update is increased for all tracks
-11.2 Pairwise Matching Cost
-
-For each track and detection pair:
-
-IoU is computed
-cosine distance is computed
-total cost is computed as:
-cost = 0.4 * (1 - IoU) + 0.6 * cosine_distance
-
-This gives more weight to appearance similarity than box overlap.
-
-11.3 Greedy Assignment
-
-All track-detection pairs are sorted by ascending cost.
-
-A match is accepted if it passes gating rules:
-
-if IoU is good enough and appearance is reasonable
-or if IoU is weak but appearance is very strong
-
-This helps maintain identity through motion, occlusion, and camera gaps.
-
-11.4 Matched Track Update
-
-When a detection matches an existing track:
-
-box is updated
-embedding is smoothed using momentum
-time_since_update is reset
-gallery memory is updated
-11.5 Unmatched Detection Handling
-
-If a detection does not match any active track:
-
-the gallery is searched for a similar historical embedding
-if a similar identity exists, that old ID is reused
-otherwise a new ID is created
-11.6 Dead Track Removal
-
-Tracks that exceed max_age without updates are removed.
-
-11.7 Gallery Cleanup
-
-Old gallery items beyond gallery_max_age are deleted.
-
-12. Long-Term Gallery Memory
-
-The gallery is the key mechanism for ID reuse after long gaps.
-
-Why It Exists
-
-A normal tracker usually loses identity when:
-
-a person disappears for many frames
-a blackout occurs
-the person exits and later re-enters
-
-The gallery solves that by storing appearance memory for each known ID.
-
-Gallery Matching
-
-When a new unmatched detection appears:
-
-compare its embedding against all gallery embeddings
-find the smallest cosine distance
-if below threshold, reuse that existing ID
-Gallery Update
-
-Whenever a track is matched:
-
-its appearance embedding updates the gallery
-momentum smoothing keeps the memory stable over time
-
-This gives the system long-term identity consistency.
-
-13. Drawing and Visualization
-draw_pose()
-
-Draws:
-
-skeleton edges in yellow
-keypoints in blue
-
-Only keypoints above confidence threshold are drawn.
-
-blend_all_masks_once()
-
-Combines all masks into a single overlay before blending.
-
-This is important because blending masks repeatedly one by one can darken the frame and create the black-frame artifact. By blending once:
-
-overlay stays stable
-frame brightness remains correct
-Visual Elements Drawn Per Person
-red segmentation overlay
-green bounding box
-green text label with:
-ID
-confidence
-pose skeleton and joints
-14. Main Workflow
-
-Implemented in main().
-
-Step-by-step runtime flow
-1. Load paths
-
-The code defines:
-
-segmentation model path
-pose model path
-ReID model path
-input video path
-output video path
-2. Open video
-
-The input video is loaded with cv::VideoCapture.
-
-3. Read metadata
-
-The following are extracted:
-
-frame width
-frame height
-FPS
-4. Initialize video writer
-
-If output saving is enabled, a writer is opened for the processed video.
-
-5. Initialize ONNX Runtime
-
-The following sessions are created:
-
-segmentation session
-pose session
-ReID extractor session
-6. Initialize tracker
-
-The tracker is configured, including:
-
-max_age
-gallery thresholds
-embedding smoothing
-7. Frame processing loop
-
-For each frame:
-
-a. Detect persons and masks
-
-Call detectPersonsYOLOv8Seg().
-
-b. For each detection
-extract ReID embedding
-run pose estimation on crop
-c. Associate detections with tracks
-
-Call tracker.step().
-
-d. Draw masks
-
-Call blend_all_masks_once().
-
-e. Draw boxes, IDs, confidence, and pose
-
-Loop over detections and render results.
-
-f. Display frame
-
-Show the processed frame in an OpenCV window.
-
-g. Save frame
-
-If output writer is enabled, write the frame to disk.
-
-h. Logging
-
-Every 50 frames, print progress.
-
-8. Release resources
-
-At the end:
-
-release video capture
-release writer
-destroy windows
-15. Pipeline Summary
-End-to-end workflow
-Input video
-   ↓
-Frame read
-   ↓
-YOLOv8-SEG
-   ↓
-Person boxes + masks
-   ↓
-For each detection:
-   ├─ OSNet ReID embedding
-   └─ YOLOv8-POSE on crop
-   ↓
-Tracker association
-   ├─ IoU matching
-   ├─ ReID similarity
-   └─ gallery-based ID reuse
-   ↓
-Visualization
-   ├─ mask overlay
-   ├─ bounding box
-   ├─ ID label
-   └─ pose skeleton
-   ↓
-Display / save output video
-16. Important Parameters
-Detection
-detConfThresh = 0.35
-detIouThresh = 0.45
-
-These control:
-
-minimum person confidence
-NMS overlap filtering
-Pose
-poseDetThresh = 0.25
-kpDrawThresh = 0.30
-
-These control:
-
-minimum pose candidate confidence
-minimum keypoint confidence for drawing
-Tracker
-max_age = max(default, 3.5 * fps)
-iou_gate = 0.05
-cos_dist_thresh = 0.35
-emb_momentum = 0.9
-
-These control:
-
-how long a track survives without detection
-how strict IoU matching is
-how strict appearance matching is
-how embeddings are smoothed
-Gallery
-gallery_max_age = 5000
-gallery_cos_thresh = 0.35
-gallery_momentum = 0.9
-
-These control:
-
-how long gallery identities are kept
-how strict long-term ID reuse is
-how stable stored gallery embeddings remain
-17. Strengths of This Design
-combines geometry and appearance for robust tracking
-supports long-term ID recovery
-separates pose estimation per person crop
-provides segmentation, pose, and tracking in one pipeline
-supports ONNX deployment with OpenCV and ONNX Runtime
-handles common YOLOv8 export variations
-18. Limitations and Assumptions
-assumes COCO class layout and person = 0
-assumes common YOLOv8 ONNX output formats
-greedy matching is simpler than Hungarian assignment
-pose model output parsing may require adjustment for unusual exports
-no batching is used, so performance may drop with many people
-full-frame segmentation mask resizing may be costly on large frames
-19. Possible Improvements
-use letterbox preprocessing instead of direct resize
-replace greedy assignment with Hungarian matching
-batch ReID and pose inference for multiple people
-add motion model such as Kalman filtering
-use mask-aware IoU for better association
-support multi-class detection if needed
-make model paths and thresholds configurable from CLI
-add FPS benchmarking and profiling
-export tracking results to JSON or CSV
-20. File-Level Functional Summary
-ReIDExtractor
-
-Responsible for:
-
-preprocessing person crops
-running OSNet
-returning normalized embeddings
-detectPersonsYOLOv8Seg
-
-Responsible for:
-
-frame preprocessing
-YOLOv8-seg inference
-decoding person detections
-building masks
-applying NMS
-runPoseOnCropYOLOv8
-
-Responsible for:
-
-crop preprocessing
-pose ONNX inference
-decoding the best keypoint result
-Tracker
-
-Responsible for:
-
-managing active tracks
-matching detections to tracks
-smoothing embeddings
-maintaining long-term gallery memory
-reusing IDs after disappearance
-draw_pose
-
-Responsible for drawing the pose skeleton.
-
-blend_all_masks_once
-
-Responsible for safe mask blending without repeated darkening.
-
-main
-
-Responsible for:
-
-configuration
-model loading
-video loop
-orchestration of all modules
-visualization
-saving output
-21. Conclusion
-
-This code implements a complete human analysis and tracking system that integrates detection, segmentation, pose estimation, re-identification, and long-term tracking into a single ONNX-based C++ application.
-
-Its main advantage is that it does not rely only on box overlap. By combining appearance embeddings with a gallery memory, it can preserve identity much more reliably, even through temporary disappearance, occlusion, or dark frames.
-
-It is a strong baseline for real-world person tracking applications where persistent identity matters.
+That would make the project easier to test, tune, and document further.
