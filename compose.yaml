@@ -1,0 +1,6 @@
+services:
+  persontracking:
+    image: persontracking
+    build:
+      context: .
+      dockerfile: ./Dockerfile

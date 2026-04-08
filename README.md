@@ -64,6 +64,7 @@ flowchart TD
 ├── .gitignore             # Git and Qt Creator ignore rules
 ├── Person_tracking.pro    # Qt Creator / qmake project file
 ├── README.md              # English documentation
+├── README.de.md           # German documentation
 └── main.cpp               # Full pipeline implementation
 ```
 

@@ -6,7 +6,22 @@ CONFIG -= qt
 CONFIG += link_pkgconfig
 PKGCONFIG += opencv4
 
-SOURCES += main.cpp
+SOURCES += \
+    config.cpp \
+    detector.cpp \
+    main.cpp \
+    pose.cpp \
+    reid.cpp \
+    tracker.cpp \
+    visualization.cpp
+
+HEADERS += \
+    config.h \
+    detector.h \
+    pose.h \
+    reid.h \
+    tracker.h \
+    visualization.h
 
 INCLUDEPATH += /home/mosta/Downloads/onnxruntime-linux-x64-1.24.2/include
 
