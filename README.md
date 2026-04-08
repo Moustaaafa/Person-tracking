@@ -1,6 +1,6 @@
 # Person Tracking App
 
-A real-time person tracking application built with **C++** and **Qt Creator**, 
+A person tracking application built with **C++** and **Qt Creator**, 
 combining state-of-the-art deep learning models for detection, segmentation, 
 pose estimation, and re-identification.
 
